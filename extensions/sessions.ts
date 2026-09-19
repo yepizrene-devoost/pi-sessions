@@ -1,5 +1,4 @@
 import {
-  DynamicBorder,
   SessionManager,
   type ExtensionAPI,
   type ExtensionCommandContext,
@@ -12,6 +11,8 @@ import {
   SelectList,
   Text,
   matchesKey,
+  truncateToWidth,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 
 const MAX_LABEL = 56;
@@ -69,6 +70,19 @@ function buildItems(
     label: itemLabel(session),
     description: itemDescription(session, currentFile, listAll),
   }));
+}
+
+// Wrap rendered content lines in a full box with all four borders.
+function frameLines(lines: readonly string[], width: number): string[] {
+  const inner = Math.max(1, width - 4); // space between the side borders (1+1 padding, 1+1 borders)
+  const top = "┌" + "─".repeat(Math.max(0, width - 2)) + "┐";
+  const bottom = "└" + "─".repeat(Math.max(0, width - 2)) + "┘";
+  const body = lines.map((line) => {
+    const txt = truncateToWidth(line, inner, "");
+    const pad = Math.max(0, inner - visibleWidth(txt));
+    return "│ " + txt + " ".repeat(pad) + " │";
+  });
+  return [top, ...body, bottom];
 }
 
 export default function sessionsExtension(pi: ExtensionAPI) {
@@ -178,28 +192,33 @@ async function pickModal(
       const subtitle = listAll ? "Across every project" : truncate(ctx.cwd, MAX_SUBTITLE);
 
       const container = new Container();
-      container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
       container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
       container.addChild(new Text(theme.fg("dim", subtitle), 1, 0));
+      container.addChild(new Text("", 1, 0));
 
-      const selectList = new SelectList(items, Math.min(items.length, 12), {
-        selectedPrefix: (t) => theme.fg("accent", t),
-        selectedText: (t) => theme.fg("accent", t),
-        description: (t) => theme.fg("muted", t),
-        scrollInfo: (t) => theme.fg("dim", t),
-        noMatch: (t) => theme.fg("warning", t),
-      });
+      const selectList = new SelectList(
+        items,
+        Math.min(items.length, 12),
+        {
+          selectedPrefix: (t) => theme.fg("accent", t),
+          selectedText: (t) => theme.fg("accent", t),
+          description: (t) => theme.fg("muted", t),
+          scrollInfo: (t) => theme.fg("dim", t),
+          noMatch: (t) => theme.fg("warning", t),
+        },
+        { maxPrimaryColumnWidth: 44 },
+      );
       selectList.onSelect = (item) => done({ action: "resume", path: item.value });
       selectList.onCancel = () => done(null);
       container.addChild(selectList);
 
+      container.addChild(new Text("", 1, 0));
       container.addChild(
         new Text(theme.fg("dim", "↑↓ navigate · enter resume · ctrl+r rename · esc cancel"), 1, 0),
       );
-      container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
 
       return {
-        render: (width) => container.render(width),
+        render: (width) => frameLines(container.render(Math.max(1, width - 4)), width),
         invalidate: () => container.invalidate(),
         handleInput: (data) => {
           if (matchesKey(data, Key.ctrl("r"))) {
@@ -214,7 +233,7 @@ async function pickModal(
     },
     {
       overlay: true,
-      overlayOptions: { anchor: "center", width: "85%", minWidth: 50, maxHeight: "85%", margin: 2 },
+      overlayOptions: { anchor: "center", width: 72, minWidth: 56, maxHeight: "85%", margin: 2 },
     },
   );
 }
