@@ -1,0 +1,25 @@
+{
+  "name": "pi-sessions",
+  "version": "0.1.0",
+  "description": "Pi extension: list and resume sessions for the current directory via /sessions.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "sessions",
+    "resume"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yepizrene-devoost/pi-sessions.git"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}
