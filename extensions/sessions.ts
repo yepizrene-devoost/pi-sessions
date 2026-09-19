@@ -223,13 +223,13 @@ async function pickModal(
           const header = [...titleText.render(inner), ...subtitleText.render(inner), "", ""];
           const footer = ["", ...helpText.render(inner)];
 
-          let bodyHeight = Math.min(maxBody, Math.max(minBody, items.length));
+          const listLines = selectList.render(inner); // includes a trailing scroll-indicator line when there are more sessions than visible rows
           const available = termRows - 4 - header.length - footer.length;
-          bodyHeight = Math.max(4, Math.min(bodyHeight, available));
+          const bodyHeight = Math.max(minBody, Math.min(listLines.length, available));
 
-          const listLines = selectList.render(inner).slice(0, bodyHeight);
-          const padTop = Math.max(0, Math.floor((bodyHeight - listLines.length) / 2));
-          const padBottom = Math.max(0, bodyHeight - listLines.length - padTop);
+          const visible = listLines.slice(0, bodyHeight);
+          const padTop = Math.max(0, Math.floor((bodyHeight - visible.length) / 2));
+          const padBottom = Math.max(0, bodyHeight - visible.length - padTop);
 
           const block = [
             ...header,
