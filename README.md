@@ -22,13 +22,13 @@ No more digging through `~/.pi/agent/sessions/` to find sessions.
 
 ## Install
 
-From GitHub (git package):
+Install the latest `main` (development branch):
 
 ```bash
-pi install git:github.com/yepizrene-devoost/pi-sessions@v0.1.0
+pi install git:github.com/yepizrene-devoost/pi-sessions@main
 ```
 
-Quick test without installing:
+Quick test without installing (defaults to `main`):
 
 ```bash
 pi -e git:github.com/yepizrene-devoost/pi-sessions
@@ -39,6 +39,14 @@ Local development:
 ```bash
 pi -e ./extensions/sessions.ts
 ```
+
+## Versioning
+
+`main` is the living development branch and is the recommended install target.
+Stable releases are cut with a git tag (for example `v0.1.0`) when a release is
+published; point `@<tag>` at those only if you want a pinned frozen version.
+While iterating, install from `@main` so `/reload` picks up the latest commits
+without re-tagging every change.
 
 ## Usage
 
