@@ -5,7 +5,6 @@ import {
   type SessionInfo,
 } from "@earendil-works/pi-coding-agent";
 import {
-  Container,
   Key,
   type SelectItem,
   SelectList,
@@ -191,14 +190,19 @@ async function pickModal(
       const title = listAll ? "All sessions" : "Sessions";
       const subtitle = listAll ? "Across every project" : truncate(ctx.cwd, MAX_SUBTITLE);
 
-      const container = new Container();
-      container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
-      container.addChild(new Text(theme.fg("dim", subtitle), 1, 0));
-      container.addChild(new Text("", 1, 0));
+      const titleText = new Text(theme.fg("accent", theme.bold(title)), 1, 0);
+      const subtitleText = new Text(theme.fg("dim", subtitle), 1, 0);
+      const helpText = new Text(
+        theme.fg("dim", "↑↓ navigate · enter resume · ctrl+r rename · esc cancel"),
+        1,
+        0,
+      );
 
+      const maxBody = 14;
+      const minBody = 6;
       const selectList = new SelectList(
         items,
-        Math.min(items.length, 12),
+        maxBody,
         {
           selectedPrefix: (t) => theme.fg("accent", t),
           selectedText: (t) => theme.fg("accent", t),
@@ -210,16 +214,38 @@ async function pickModal(
       );
       selectList.onSelect = (item) => done({ action: "resume", path: item.value });
       selectList.onCancel = () => done(null);
-      container.addChild(selectList);
-
-      container.addChild(new Text("", 1, 0));
-      container.addChild(
-        new Text(theme.fg("dim", "↑↓ navigate · enter resume · ctrl+r rename · esc cancel"), 1, 0),
-      );
 
       return {
-        render: (width) => frameLines(container.render(Math.max(1, width - 4)), width),
-        invalidate: () => container.invalidate(),
+        render: (width) => {
+          const inner = Math.max(1, width - 4);
+          const termRows = Math.max(20, tui.terminal.rows);
+
+          const header = [...titleText.render(inner), ...subtitleText.render(inner), "", ""];
+          const footer = ["", ...helpText.render(inner)];
+
+          let bodyHeight = Math.min(maxBody, Math.max(minBody, items.length));
+          const available = termRows - 4 - header.length - footer.length;
+          bodyHeight = Math.max(4, Math.min(bodyHeight, available));
+
+          const listLines = selectList.render(inner).slice(0, bodyHeight);
+          const padTop = Math.max(0, Math.floor((bodyHeight - listLines.length) / 2));
+          const padBottom = Math.max(0, bodyHeight - listLines.length - padTop);
+
+          const block = [
+            ...header,
+            ...Array<string>(padTop).fill(""),
+            ...listLines,
+            ...Array<string>(padBottom).fill(""),
+            ...footer,
+          ];
+          return frameLines(block, width);
+        },
+        invalidate: () => {
+          titleText.invalidate();
+          subtitleText.invalidate();
+          helpText.invalidate();
+          selectList.invalidate();
+        },
         handleInput: (data) => {
           if (matchesKey(data, Key.ctrl("r"))) {
             const item = selectList.getSelectedItem();
