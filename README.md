@@ -8,12 +8,17 @@ No more digging through `~/.pi/agent/sessions/` to find sessions.
 
 ## Features
 
-- `/sessions` lists sessions scoped to the directory where you launched Pi.
+- `/sessions` lists sessions scoped to the directory where you launched Pi, in a
+  centered TUI overlay (modal), not an inline list.
 - Each entry shows the display name (or first message), message count, modified
   time, and a short id.
 - The currently open session is marked `current`.
 - Pick one to confirm and resume it; the current session is suspended and the
   selected one is reopened in place.
+- Rename any session directly from the picker with `Ctrl+R` (emptying the name
+  clears it).
+- `/sessions --all` lists sessions from every project, with the project path
+  shown per entry.
 
 ## Install
 
@@ -43,8 +48,18 @@ Run Pi inside your project, then type:
 /sessions
 ```
 
-Choose a session and confirm to resume it. If it is already the active one you
-get a notice instead of a switch.
+Inside the picker:
+
+- `↑`/`↓` navigate
+- `Enter` resume the selected session
+- `Ctrl+R` rename the selected session
+- `Esc` cancel
+
+To list sessions from every project instead of just the current directory:
+
+```text
+/sessions --all
+```
 
 ## How it works
 

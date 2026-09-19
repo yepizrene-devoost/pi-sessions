@@ -9,3 +9,5 @@ dist/
 
 # Local orchestration notes (not part of the package)
 odd/
+# Local Pi runtime state
+.atl/
