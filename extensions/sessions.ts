@@ -233,7 +233,7 @@ async function pickModal(
     },
     {
       overlay: true,
-      overlayOptions: { anchor: "center", width: 72, minWidth: 56, maxHeight: "85%", margin: 2 },
+      overlayOptions: { anchor: "center", width: 100, minWidth: 80, maxHeight: "85%", margin: 2 },
     },
   );
 }
