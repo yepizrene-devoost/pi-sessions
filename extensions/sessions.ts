@@ -5,6 +5,7 @@ import {
   type SessionInfo,
 } from "@earendil-works/pi-coding-agent";
 import {
+  Input,
   Key,
   type SelectItem,
   SelectList,
@@ -16,10 +17,6 @@ import {
 
 const MAX_LABEL = 56;
 const MAX_SUBTITLE = 80;
-
-type Picked =
-  | { action: "resume"; path: string }
-  | { action: "rename"; path: string };
 
 function truncate(text: string, max: number): string {
   const clean = text.replace(/\s+/g, " ").trim();
@@ -114,57 +111,33 @@ export default function sessionsExtension(pi: ExtensionAPI) {
       const sorted = [...sessions].sort((a, b) => b.modified.getTime() - a.modified.getTime());
       const currentFile = ctx.sessionManager.getSessionFile();
 
-      for (;;) {
-        const picked =
-          ctx.mode === "tui"
-            ? await pickModal(ctx, sorted, currentFile, listAll)
-            : await pickFallback(ctx, sorted, currentFile, listAll);
+      const pickedPath =
+        ctx.mode === "tui"
+          ? await pickModal(ctx, sorted, currentFile, listAll)
+          : await pickFallback(ctx, sorted, currentFile, listAll);
 
-        if (!picked) return;
+      if (!pickedPath) return;
 
-        if (picked.action === "rename") {
-          const session = sorted.find((s) => s.path === picked.path);
-          const newName = await ctx.ui.input("Rename session", session?.name?.trim() ?? "");
-          if (newName === undefined) continue; // input cancelled -> back to picker
+      const session = sorted.find((s) => s.path === pickedPath);
+      if (!session) return;
 
-          const cleaned = newName.replace(/[\r\n]+/g, " ").trim();
-          try {
-            renameSession(ctx, picked.path, cleaned);
-          } catch (error) {
-            ctx.ui.notify(
-              `Rename failed: ${error instanceof Error ? error.message : String(error)}`,
-              "error",
-            );
-            continue;
-          }
-          if (session) session.name = cleaned || undefined;
-          ctx.ui.notify(cleaned ? `Renamed to "${cleaned}"` : "Session name cleared", "info");
-          continue;
-        }
-
-        // resume
-        const session = sorted.find((s) => s.path === picked.path);
-        if (!session) return;
-
-        if (session.path === currentFile) {
-          ctx.ui.notify("Already in this session.", "info");
-          return;
-        }
-
-        const ok = await ctx.ui.confirm(
-          `Resume "${itemLabel(session)}"?`,
-          `${session.path}\n\nSwitching suspends the current session and resumes the selected one.`,
-        );
-        if (!ok) return;
-
-        const result = await ctx.switchSession(session.path, {
-          withSession: async (newCtx) => {
-            newCtx.ui.notify("Session resumed.", "info");
-          },
-        });
-        if (result.cancelled) ctx.ui.notify("Switch cancelled.", "info");
+      if (session.path === currentFile) {
+        ctx.ui.notify("Already in this session.", "info");
         return;
       }
+
+      const ok = await ctx.ui.confirm(
+        `Resume "${itemLabel(session)}"?`,
+        `${session.path}\n\nSwitching suspends the current session and resumes the selected one.`,
+      );
+      if (!ok) return;
+
+      const result = await ctx.switchSession(session.path, {
+        withSession: async (newCtx) => {
+          newCtx.ui.notify("Session resumed.", "info");
+        },
+      });
+      if (result.cancelled) ctx.ui.notify("Switch cancelled.", "info");
     },
   });
 }
@@ -178,15 +151,64 @@ function renameSession(ctx: ExtensionCommandContext, path: string, name: string)
   manager.appendSessionInfo(name);
 }
 
+// A small modal overlay with a text input, stacked on top of the picker.
+async function renameDialog(
+  ctx: ExtensionCommandContext,
+  initialName: string,
+): Promise<string | undefined> {
+  return ctx.ui.custom<string | undefined>(
+    (tui, theme, _keybindings, done) => {
+      const input = new Input({ prompt: "› " });
+      input.setValue(initialName);
+      input.onSubmit = (value) => done(value);
+      input.onEscape = () => done(undefined);
+
+      let focused = false;
+      return {
+        get focused() {
+          return focused;
+        },
+        set focused(value: boolean) {
+          focused = value;
+          input.focused = value;
+        },
+        render: (width: number) => {
+          const inner = Math.max(1, width - 4);
+          const block = [
+            theme.fg("accent", theme.bold("Rename session")),
+            "",
+            ...input.render(inner),
+            "",
+            theme.fg("dim", "enter submit · esc cancel"),
+          ];
+          return frameLines(block, width);
+        },
+        invalidate: () => input.invalidate(),
+        handleInput: (data: string) => {
+          if (matchesKey(data, Key.ctrl("c"))) {
+            done(undefined);
+            return;
+          }
+          input.handleInput(data);
+          tui.requestRender();
+        },
+      };
+    },
+    {
+      overlay: true,
+      overlayOptions: { anchor: "center", width: 66, minWidth: 48, margin: 2 },
+    },
+  );
+}
+
 async function pickModal(
   ctx: ExtensionCommandContext,
   sessions: SessionInfo[],
   currentFile: string | undefined,
   listAll: boolean,
-): Promise<Picked | null> {
-  return ctx.ui.custom<Picked | null>(
+): Promise<string | null> {
+  return ctx.ui.custom<string | null>(
     (tui, theme, _keybindings, done) => {
-      const items = buildItems(sessions, currentFile, listAll);
       const title = listAll ? "All sessions" : "Sessions";
       const subtitle = listAll ? "Across every project" : truncate(ctx.cwd, MAX_SUBTITLE);
 
@@ -200,20 +222,60 @@ async function pickModal(
 
       const maxBody = 14;
       const minBody = 6;
-      const selectList = new SelectList(
-        items,
-        maxBody,
-        {
-          selectedPrefix: (t) => theme.fg("accent", t),
-          selectedText: (t) => theme.fg("accent", t),
-          description: (t) => theme.fg("muted", t),
-          scrollInfo: (t) => theme.fg("dim", t),
-          noMatch: (t) => theme.fg("warning", t),
-        },
-        { maxPrimaryColumnWidth: 44 },
-      );
-      selectList.onSelect = (item) => done({ action: "resume", path: item.value });
-      selectList.onCancel = () => done(null);
+      let selectedPath: string | undefined;
+
+      const makeList = (): SelectList => {
+        const items = buildItems(sessions, currentFile, listAll);
+        const list = new SelectList(
+          items,
+          maxBody,
+          {
+            selectedPrefix: (t) => theme.fg("accent", t),
+            selectedText: (t) => theme.fg("accent", t),
+            description: (t) => theme.fg("muted", t),
+            scrollInfo: (t) => theme.fg("dim", t),
+            noMatch: (t) => theme.fg("warning", t),
+          },
+          { maxPrimaryColumnWidth: 44 },
+        );
+        list.onSelect = (item) => done(item.value);
+        list.onCancel = () => done(null);
+        list.onSelectionChange = (item) => {
+          selectedPath = item.value;
+        };
+        if (selectedPath) {
+          const index = items.findIndex((item) => item.value === selectedPath);
+          if (index >= 0) list.setSelectedIndex(index);
+        }
+        return list;
+      };
+
+      let selectList = makeList();
+
+      const openRename = (): void => {
+        const item = selectList.getSelectedItem();
+        if (!item) return;
+        selectedPath = item.value;
+        const session = sessions.find((s) => s.path === item.value);
+
+        void renameDialog(ctx, session?.name?.trim() ?? "").then((newName) => {
+          if (newName !== undefined) {
+            const cleaned = newName.replace(/[\r\n]+/g, " ").trim();
+            try {
+              renameSession(ctx, item.value, cleaned);
+              if (session) session.name = cleaned || undefined;
+              ctx.ui.notify(cleaned ? `Renamed to "${cleaned}"` : "Session name cleared", "info");
+            } catch (error) {
+              ctx.ui.notify(
+                `Rename failed: ${error instanceof Error ? error.message : String(error)}`,
+                "error",
+              );
+            }
+            selectList = makeList(); // rebuild labels, restore selection
+          }
+          tui.requestRender();
+        });
+      };
 
       return {
         render: (width) => {
@@ -234,7 +296,7 @@ async function pickModal(
           const block = [
             ...header,
             ...Array<string>(padTop).fill(""),
-            ...listLines,
+            ...visible,
             ...Array<string>(padBottom).fill(""),
             ...footer,
           ];
@@ -248,8 +310,7 @@ async function pickModal(
         },
         handleInput: (data) => {
           if (matchesKey(data, Key.ctrl("r"))) {
-            const item = selectList.getSelectedItem();
-            if (item) done({ action: "rename", path: item.value });
+            openRename();
             return;
           }
           selectList.handleInput(data);
@@ -269,7 +330,7 @@ async function pickFallback(
   sessions: SessionInfo[],
   currentFile: string | undefined,
   listAll: boolean,
-): Promise<Picked | null> {
+): Promise<string | null> {
   const items = sessions.map(
     (s) => `${itemLabel(s)}  ·  ${itemDescription(s, currentFile, listAll)}`,
   );
@@ -279,6 +340,5 @@ async function pickFallback(
 
   const index = items.indexOf(selected);
   const session = index >= 0 ? sessions[index] : undefined;
-  if (!session) return null;
-  return { action: "resume", path: session.path };
+  return session ? session.path : null;
 }
