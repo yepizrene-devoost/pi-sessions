@@ -17,8 +17,13 @@ No more digging through `~/.pi/agent/sessions/` to find sessions.
   selected one is reopened in place.
 - Rename any session directly from the picker with `Ctrl+R` (emptying the name
   clears it).
+- Archive a session with `Ctrl+A`: it is a soft delete, so it leaves the active
+  list but its file stays on disk.
+- `Tab` switches to the archived view. From there you can resume an archived
+  session, unarchive it (`Ctrl+A`), or permanently delete it (`Ctrl+D`).
 - `/sessions --all` lists sessions from every project, with the project path
   shown per entry.
+- `/sessions --archived` opens directly in the archived view.
 
 ## Install
 
@@ -61,13 +66,28 @@ Inside the picker:
 - `↑`/`↓` navigate
 - `Enter` resume the selected session
 - `Ctrl+R` rename the selected session
+- `Ctrl+A` archive / unarchive the selected session
+- `Tab` switch between the active and archived views
+- `Ctrl+D` delete the selected session permanently (archived view only)
 - `Esc` cancel
 
-To list sessions from every project instead of just the current directory:
+Options:
 
 ```text
-/sessions --all
+/sessions --all        # include sessions from every project
+/sessions --archived   # open directly in the archived view
 ```
+
+## Archiving
+
+Archiving is a **soft delete**: the session is hidden from the active list but
+its `.jsonl` file is untouched and still shows up in the archived view.
+Permanent deletion (`Ctrl+D`) is only available from the archived view, asks for
+confirmation, and then removes the session file from disk.
+
+Archive state lives next to your sessions in
+`~/.pi/agent/sessions/.pi-sessions-archived.json`, keyed by session id, so it
+survives renaming or moving a session file.
 
 ## How it works
 

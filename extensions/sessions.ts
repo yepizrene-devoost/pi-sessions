@@ -1,3 +1,7 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+
 import {
   SessionManager,
   type ExtensionAPI,
@@ -6,10 +10,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   Input,
-  Key,
   type SelectItem,
   SelectList,
-  Text,
   matchesKey,
   truncateToWidth,
   visibleWidth,
@@ -17,6 +19,15 @@ import {
 
 const MAX_LABEL = 56;
 const MAX_SUBTITLE = 80;
+const ARCHIVE_FILE = ".pi-sessions-archived.json";
+
+type SessionView = "active" | "archived";
+
+/** Soft-delete state, keyed by session id so it survives moving a session file. */
+interface ArchiveRegistry {
+  version: number;
+  archived: Record<string, { archivedAt: string; path?: string }>;
+}
 
 function truncate(text: string, max: number): string {
   const clean = text.replace(/\s+/g, " ").trim();
@@ -81,16 +92,46 @@ function frameLines(lines: readonly string[], width: number): string[] {
   return [top, ...body, bottom];
 }
 
+function isArchived(registry: ArchiveRegistry, session: SessionInfo): boolean {
+  return Object.prototype.hasOwnProperty.call(registry.archived, session.id);
+}
+
+function archiveRegistryPath(ctx: ExtensionCommandContext): string {
+  const file = ctx.sessionManager.getSessionFile();
+  const root = file ? dirname(dirname(file)) : join(homedir(), ".pi", "agent", "sessions");
+  return join(root, ARCHIVE_FILE);
+}
+
+function loadArchiveRegistry(path: string): ArchiveRegistry {
+  try {
+    if (existsSync(path)) {
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<ArchiveRegistry>;
+      if (parsed && typeof parsed === "object" && parsed.archived && typeof parsed.archived === "object") {
+        return { version: 1, archived: parsed.archived };
+      }
+    }
+  } catch {
+    // Corrupt or unreadable registry: start from an empty one.
+  }
+  return { version: 1, archived: {} };
+}
+
+function saveArchiveRegistry(path: string, registry: ArchiveRegistry): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(registry, null, 2)}\n`);
+}
+
 export default function sessionsExtension(pi: ExtensionAPI) {
   pi.registerCommand("sessions", {
-    description: "List sessions for the current directory and resume or rename one",
+    description: "List, resume, rename, archive (soft-delete), or delete sessions",
     getArgumentCompletions: (prefix) => {
-      const opts = ["--all"].filter((o) => o.startsWith(prefix));
+      const opts = ["--all", "--archived"].filter((o) => o.startsWith(prefix));
       return opts.length > 0 ? opts.map((o) => ({ value: o, label: o })) : null;
     },
     async handler(args, ctx) {
-      const trimmed = args.trim();
-      const listAll = trimmed === "--all" || trimmed === "-a";
+      const flags = args.trim().split(/\s+/).filter(Boolean);
+      const listAll = flags.includes("--all") || flags.includes("-a");
+      const wantArchived = flags.includes("--archived");
 
       let sessions;
       try {
@@ -111,10 +152,20 @@ export default function sessionsExtension(pi: ExtensionAPI) {
       const sorted = [...sessions].sort((a, b) => b.modified.getTime() - a.modified.getTime());
       const currentFile = ctx.sessionManager.getSessionFile();
 
+      const registryPath = archiveRegistryPath(ctx);
+      const registry = loadArchiveRegistry(registryPath);
+      const hasActive = sorted.some((s) => !isArchived(registry, s));
+      const initialView: SessionView = wantArchived || !hasActive ? "archived" : "active";
+
       const pickedPath =
         ctx.mode === "tui"
-          ? await pickModal(ctx, sorted, currentFile, listAll)
-          : await pickFallback(ctx, sorted, currentFile, listAll);
+          ? await pickModal(ctx, sorted, currentFile, listAll, registry, registryPath, initialView)
+          : await pickFallback(
+              ctx,
+              sorted.filter((s) => !isArchived(registry, s)),
+              currentFile,
+              listAll,
+            );
 
       if (!pickedPath) return;
 
@@ -185,7 +236,7 @@ async function renameDialog(
         },
         invalidate: () => input.invalidate(),
         handleInput: (data: string) => {
-          if (matchesKey(data, Key.ctrl("c"))) {
+          if (matchesKey(data, "ctrl+c")) {
             done(undefined);
             return;
           }
@@ -206,26 +257,22 @@ async function pickModal(
   sessions: SessionInfo[],
   currentFile: string | undefined,
   listAll: boolean,
+  registry: ArchiveRegistry,
+  registryPath: string,
+  initialView: SessionView,
 ): Promise<string | null> {
   return ctx.ui.custom<string | null>(
     (tui, theme, _keybindings, done) => {
-      const title = listAll ? "All sessions" : "Sessions";
-      const subtitle = listAll ? "Across every project" : truncate(ctx.cwd, MAX_SUBTITLE);
-
-      const titleText = new Text(theme.fg("accent", theme.bold(title)), 1, 0);
-      const subtitleText = new Text(theme.fg("dim", subtitle), 1, 0);
-      const helpText = new Text(
-        theme.fg("dim", "↑↓ navigate · enter resume · ctrl+r rename · esc cancel"),
-        1,
-        0,
-      );
-
       const maxBody = 14;
       const minBody = 6;
+      let view: SessionView = initialView;
       let selectedPath: string | undefined;
 
+      const visibleSessions = (): SessionInfo[] =>
+        sessions.filter((s) => (view === "archived" ? isArchived(registry, s) : !isArchived(registry, s)));
+
       const makeList = (): SelectList => {
-        const items = buildItems(sessions, currentFile, listAll);
+        const items = buildItems(visibleSessions(), currentFile, listAll);
         const list = new SelectList(
           items,
           maxBody,
@@ -252,18 +299,26 @@ async function pickModal(
 
       let selectList = makeList();
 
-      const openRename = (): void => {
-        const item = selectList.getSelectedItem();
-        if (!item) return;
-        selectedPath = item.value;
-        const session = sessions.find((s) => s.path === item.value);
+      const rebuild = (): void => {
+        selectList = makeList();
+        tui.requestRender();
+      };
 
-        void renameDialog(ctx, session?.name?.trim() ?? "").then((newName) => {
+      const selectedSession = (): SessionInfo | undefined => {
+        const item = selectList.getSelectedItem();
+        return item ? sessions.find((s) => s.path === item.value) : undefined;
+      };
+
+      const openRename = (): void => {
+        const session = selectedSession();
+        if (!session) return;
+        selectedPath = session.path;
+        void renameDialog(ctx, session.name?.trim() ?? "").then((newName) => {
           if (newName !== undefined) {
             const cleaned = newName.replace(/[\r\n]+/g, " ").trim();
             try {
-              renameSession(ctx, item.value, cleaned);
-              if (session) session.name = cleaned || undefined;
+              renameSession(ctx, session.path, cleaned);
+              session.name = cleaned || undefined;
               ctx.ui.notify(cleaned ? `Renamed to "${cleaned}"` : "Session name cleared", "info");
             } catch (error) {
               ctx.ui.notify(
@@ -271,21 +326,98 @@ async function pickModal(
                 "error",
               );
             }
-            selectList = makeList(); // rebuild labels, restore selection
           }
-          tui.requestRender();
+          rebuild();
         });
+      };
+
+      const toggleArchive = (): void => {
+        const session = selectedSession();
+        if (!session) return;
+        const previous = registry.archived[session.id];
+        if (isArchived(registry, session)) {
+          delete registry.archived[session.id];
+        } else {
+          registry.archived[session.id] = { archivedAt: new Date().toISOString(), path: session.path };
+        }
+        try {
+          saveArchiveRegistry(registryPath, registry);
+        } catch (error) {
+          // Revert in-memory state so it stays consistent with disk.
+          if (previous) registry.archived[session.id] = previous;
+          else delete registry.archived[session.id];
+          ctx.ui.notify(
+            `Could not save archive state: ${error instanceof Error ? error.message : String(error)}`,
+            "error",
+          );
+          return;
+        }
+        selectedPath = undefined;
+        rebuild();
+      };
+
+      const deleteSelected = (): void => {
+        const session = selectedSession();
+        if (!session) return;
+        void (async () => {
+          const ok = await ctx.ui.confirm(
+            `Delete "${itemLabel(session)}"?`,
+            `${session.path}\n\nThis permanently removes the session file. It cannot be undone.`,
+          );
+          if (!ok) return;
+          try {
+            if (existsSync(session.path)) rmSync(session.path, { force: true });
+            delete registry.archived[session.id];
+            saveArchiveRegistry(registryPath, registry);
+            const index = sessions.indexOf(session);
+            if (index >= 0) sessions.splice(index, 1);
+            ctx.ui.notify("Session deleted.", "info");
+          } catch (error) {
+            ctx.ui.notify(
+              `Delete failed: ${error instanceof Error ? error.message : String(error)}`,
+              "error",
+            );
+          }
+          selectedPath = undefined;
+          rebuild();
+        })();
+      };
+
+      const toggleView = (): void => {
+        view = view === "active" ? "archived" : "active";
+        selectedPath = undefined;
+        rebuild();
       };
 
       return {
         render: (width) => {
           const inner = Math.max(1, width - 4);
           const termRows = Math.max(20, tui.terminal.rows);
+          const archived = view === "archived";
 
-          const header = [...titleText.render(inner), ...subtitleText.render(inner), "", ""];
-          const footer = ["", ...helpText.render(inner)];
+          const title = archived ? "Archived sessions" : listAll ? "All sessions" : "Sessions";
+          const subtitle = archived
+            ? "Soft-deleted · enter resumes · ctrl+d deletes"
+            : listAll
+              ? "Across every project"
+              : truncate(ctx.cwd, MAX_SUBTITLE);
+          const help = archived
+            ? "↑↓ move · enter resume · ctrl+r rename · ctrl+a unarchive · ctrl+d delete · tab active · esc close"
+            : "↑↓ move · enter resume · ctrl+r rename · ctrl+a archive · tab archived · esc close";
 
-          const listLines = selectList.render(inner); // includes a trailing scroll-indicator line when there are more sessions than visible rows
+          const header = [
+            " " + theme.fg("accent", theme.bold(title)),
+            " " + theme.fg("dim", truncate(subtitle, MAX_SUBTITLE)),
+            "",
+            "",
+          ];
+          const footer = ["", " " + theme.fg("dim", help)];
+
+          const empty = visibleSessions().length === 0;
+          const listLines = empty
+            ? [" " + theme.fg("dim", archived ? "(no archived sessions)" : "(no active sessions)")]
+            : selectList.render(inner);
+
           const available = termRows - 4 - header.length - footer.length;
           const bodyHeight = Math.max(minBody, Math.min(listLines.length, available));
 
@@ -303,14 +435,23 @@ async function pickModal(
           return frameLines(block, width);
         },
         invalidate: () => {
-          titleText.invalidate();
-          subtitleText.invalidate();
-          helpText.invalidate();
           selectList.invalidate();
         },
         handleInput: (data) => {
-          if (matchesKey(data, Key.ctrl("r"))) {
+          if (matchesKey(data, "ctrl+r")) {
             openRename();
+            return;
+          }
+          if (matchesKey(data, "ctrl+a")) {
+            toggleArchive();
+            return;
+          }
+          if (matchesKey(data, "ctrl+d")) {
+            if (view === "archived") deleteSelected();
+            return;
+          }
+          if (matchesKey(data, "tab")) {
+            toggleView();
             return;
           }
           selectList.handleInput(data);
@@ -331,6 +472,10 @@ async function pickFallback(
   currentFile: string | undefined,
   listAll: boolean,
 ): Promise<string | null> {
+  if (sessions.length === 0) {
+    ctx.ui.notify("No active sessions to show.", "info");
+    return null;
+  }
   const items = sessions.map(
     (s) => `${itemLabel(s)}  ·  ${itemDescription(s, currentFile, listAll)}`,
   );
