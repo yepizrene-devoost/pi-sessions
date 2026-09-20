@@ -22,7 +22,8 @@ No more digging through `~/.pi/agent/sessions/` to find sessions.
 - `Tab` switches to the archived view. From there you can resume an archived
   session or unarchive it (`Ctrl+A`).
 - `Ctrl+D` permanently deletes the selected session (from either view), after a
-  confirmation dialog stacked as a modal on top of the list.
+  confirmation dialog stacked as a modal on top of the list. `No` is preselected,
+  so a stray `Enter` cancels instead of deleting.
 - `/sessions --all` lists sessions from every project, with the project path
   shown per entry.
 - `/sessions --archived` opens directly in the archived view.
@@ -71,7 +72,8 @@ Inside the picker:
 - `Ctrl+A` archive / unarchive the selected session
 - `Tab` switch between the active and archived views
 - `Ctrl+D` delete the selected session permanently (a confirmation modal opens
-  over the list; `Enter` selects, `Esc` cancels)
+  over the list; `No` is preselected, so `Enter` and `Esc` cancel and deleting
+  takes a deliberate selection)
 - `Esc` cancel
 
 Options:
@@ -86,7 +88,8 @@ Options:
 Archiving is a **soft delete**: the session is hidden from the active list but
 its `.jsonl` file is untouched and still shows up in the archived view.
 Permanent deletion (`Ctrl+D`) works from either view, asks for confirmation in a
-modal stacked over the list, and then removes the session file from disk.
+modal stacked over the list with `No` preselected, and then removes the session
+file from disk.
 
 Archive state lives next to your sessions in
 `~/.pi/agent/sessions/.pi-sessions-archived.json`, keyed by session id, so it

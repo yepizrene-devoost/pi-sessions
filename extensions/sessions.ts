@@ -280,7 +280,9 @@ interface ConfirmOverlayOptions {
 }
 
 // A confirmation dialog rendered as its own overlay, so it stacks on top of the
-// picker instead of replacing the editor area underneath it.
+// picker instead of replacing the editor area underneath it. The non-destructive
+// entry starts selected: this dialog only guards irreversible actions, so a stray
+// Enter must cancel instead of confirming.
 async function confirmOverlay(
   ctx: ExtensionCommandContext,
   options: ConfirmOverlayOptions,
@@ -297,6 +299,7 @@ async function confirmOverlay(
       );
       list.onSelect = (item) => done(item.value === "confirm");
       list.onCancel = () => done(false);
+      list.setSelectedIndex(1);
 
       return {
         render: (width: number) => {
