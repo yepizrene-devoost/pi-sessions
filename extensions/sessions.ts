@@ -7,14 +7,17 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
   type SessionInfo,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
   Input,
   type SelectItem,
   SelectList,
+  type SelectListTheme,
   matchesKey,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 
 const MAX_LABEL = 56;
@@ -90,6 +93,16 @@ function frameLines(lines: readonly string[], width: number): string[] {
     return "│ " + txt + " ".repeat(pad) + " │";
   });
   return [top, ...body, bottom];
+}
+
+function selectTheme(theme: Theme): SelectListTheme {
+  return {
+    selectedPrefix: (t) => theme.fg("accent", t),
+    selectedText: (t) => theme.fg("accent", t),
+    description: (t) => theme.fg("muted", t),
+    scrollInfo: (t) => theme.fg("dim", t),
+    noMatch: (t) => theme.fg("warning", t),
+  };
 }
 
 function isArchived(registry: ArchiveRegistry, session: SessionInfo): boolean {
@@ -252,6 +265,78 @@ async function renameDialog(
   );
 }
 
+type ConfirmTone = "dim" | "warning" | "error";
+
+interface ConfirmLine {
+  text: string;
+  tone?: ConfirmTone;
+}
+
+interface ConfirmOverlayOptions {
+  title: string;
+  lines: ConfirmLine[];
+  confirmLabel?: string;
+  cancelLabel?: string;
+}
+
+// A confirmation dialog rendered as its own overlay, so it stacks on top of the
+// picker instead of replacing the editor area underneath it.
+async function confirmOverlay(
+  ctx: ExtensionCommandContext,
+  options: ConfirmOverlayOptions,
+): Promise<boolean> {
+  return ctx.ui.custom<boolean>(
+    (tui, theme, _keybindings, done) => {
+      const list = new SelectList(
+        [
+          { value: "confirm", label: options.confirmLabel ?? "Yes" },
+          { value: "cancel", label: options.cancelLabel ?? "No" },
+        ],
+        2,
+        selectTheme(theme),
+      );
+      list.onSelect = (item) => done(item.value === "confirm");
+      list.onCancel = () => done(false);
+
+      return {
+        render: (width: number) => {
+          const inner = Math.max(1, width - 4);
+          const wrapWidth = Math.max(8, inner - 1);
+          const body = options.lines.flatMap((line) => {
+            if (line.text.trim() === "") return [""];
+            return wrapTextWithAnsi(line.text, wrapWidth).map(
+              (chunk) => " " + (line.tone ? theme.fg(line.tone, chunk) : chunk),
+            );
+          });
+          const block = [
+            " " + theme.fg("error", theme.bold(options.title)),
+            "",
+            ...body,
+            "",
+            ...list.render(inner),
+            "",
+            " " + theme.fg("dim", "enter select · esc cancel"),
+          ];
+          return frameLines(block, width);
+        },
+        invalidate: () => list.invalidate(),
+        handleInput: (data: string) => {
+          if (matchesKey(data, "ctrl+c")) {
+            done(false);
+            return;
+          }
+          list.handleInput(data);
+          tui.requestRender();
+        },
+      };
+    },
+    {
+      overlay: true,
+      overlayOptions: { anchor: "center", width: 72, minWidth: 44, margin: 2 },
+    },
+  );
+}
+
 async function pickModal(
   ctx: ExtensionCommandContext,
   sessions: SessionInfo[],
@@ -276,13 +361,7 @@ async function pickModal(
         const list = new SelectList(
           items,
           maxBody,
-          {
-            selectedPrefix: (t) => theme.fg("accent", t),
-            selectedText: (t) => theme.fg("accent", t),
-            description: (t) => theme.fg("muted", t),
-            scrollInfo: (t) => theme.fg("dim", t),
-            noMatch: (t) => theme.fg("warning", t),
-          },
+          selectTheme(theme),
           { maxPrimaryColumnWidth: 44 },
         );
         list.onSelect = (item) => done(item.value);
@@ -361,11 +440,16 @@ async function pickModal(
         if (!session) return;
         void (async () => {
           const archived = isArchived(registry, session);
-          const ok = await ctx.ui.confirm(
-            `Delete "${itemLabel(session)}"?`,
-            `${session.path}\n\nThis permanently removes the session file and cannot be undone.` +
-              (archived ? "" : "\n\nThis session is not archived."),
-          );
+          const lines: ConfirmLine[] = [
+            { text: session.path, tone: "dim" },
+            { text: "" },
+            { text: "This permanently removes the session file and cannot be undone.", tone: "warning" },
+          ];
+          if (!archived) lines.push({ text: "This session is not archived.", tone: "warning" });
+          const ok = await confirmOverlay(ctx, {
+            title: `Delete "${itemLabel(session)}"?`,
+            lines,
+          });
           if (!ok) return;
           try {
             if (existsSync(session.path)) rmSync(session.path, { force: true });
