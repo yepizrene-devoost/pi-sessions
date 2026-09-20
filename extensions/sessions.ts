@@ -360,9 +360,11 @@ async function pickModal(
         const session = selectedSession();
         if (!session) return;
         void (async () => {
+          const archived = isArchived(registry, session);
           const ok = await ctx.ui.confirm(
             `Delete "${itemLabel(session)}"?`,
-            `${session.path}\n\nThis permanently removes the session file. It cannot be undone.`,
+            `${session.path}\n\nThis permanently removes the session file and cannot be undone.` +
+              (archived ? "" : "\n\nThis session is not archived."),
           );
           if (!ok) return;
           try {
@@ -403,7 +405,7 @@ async function pickModal(
               : truncate(ctx.cwd, MAX_SUBTITLE);
           const help = archived
             ? "↑↓ move · enter resume · ctrl+r rename · ctrl+a unarchive · ctrl+d delete · tab active · esc close"
-            : "↑↓ move · enter resume · ctrl+r rename · ctrl+a archive · tab archived · esc close";
+            : "↑↓ move · enter resume · ctrl+r rename · ctrl+a archive · ctrl+d delete · tab archived · esc close";
 
           const header = [
             " " + theme.fg("accent", theme.bold(title)),
@@ -447,7 +449,7 @@ async function pickModal(
             return;
           }
           if (matchesKey(data, "ctrl+d")) {
-            if (view === "archived") deleteSelected();
+            deleteSelected();
             return;
           }
           if (matchesKey(data, "tab")) {
