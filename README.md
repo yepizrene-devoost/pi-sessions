@@ -13,14 +13,16 @@ No more digging through `~/.pi/agent/sessions/` to find sessions.
 - Each entry shows the display name (or first message), message count, modified
   time, and a short id.
 - Entries are grouped under a day header: `Today` for sessions with activity
-  today, otherwise the date such as `Fri Sep 18 2026`. Within each day the most
+  today, otherwise the date such as `Fri Sep 18 2026`. A blank, non-selectable
+  row separates each day title from its sessions, and within each day the most
   recently used session stays first.
 - The currently open session is marked `current`.
 - A `Search` field filters the list as you type. Matching is fuzzy and
-  case-insensitive over the session id, display name, first message and project
-  path; whitespace-separated tokens must all match, in order but not necessarily
-  adjacent, and the day headers follow the matches. With no matches the picker
-  shows `(no sessions match "<query>")` instead of the list.
+  case-insensitive over the session id, display name and first message, plus the
+  project path when listing every project (`--all`); whitespace-separated tokens
+  are AND-matched independently, so each token has to fuzzy-match somewhere in
+  the text on its own, and the day headers follow the matches. With no matches
+  the picker shows `(no sessions match "<query>")` instead of the list.
 - The picker is a solid panel: every line, borders included, is painted with the
   theme's message background, so the transcript behind it never shows through.
   The day headers use the theme's text color instead of the accent color.
@@ -87,8 +89,8 @@ Inside the picker:
   over the list; `No` is preselected, so `Enter` and `Esc` cancel and deleting
   takes a deliberate selection)
 - type to filter the list live: matching is fuzzy and case-insensitive, and
-  whitespace-separated tokens must all match, in order but not necessarily
-  adjacent
+  whitespace-separated tokens are AND-matched independently, so each token has to
+  fuzzy-match somewhere in the text on its own
 - `Esc` clears an active filter first; with no filter it closes the picker
 
 Options:

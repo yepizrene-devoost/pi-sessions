@@ -26,6 +26,8 @@ const MAX_LABEL = 56;
 const MAX_SUBTITLE = 80;
 const ARCHIVE_FILE = ".pi-sessions-archived.json";
 const GROUP_PREFIX = "__group__:";
+// Blank row that separates a day header from its sessions.
+const GAP_PREFIX = "__gap__:";
 
 type SessionView = "active" | "archived";
 
@@ -67,12 +69,13 @@ function groupLabel(date: Date, today: Date = new Date()): string {
   return sameDay ? "Today" : date.toDateString();
 }
 
-function isGroupHeader(value: string): boolean {
-  return value.startsWith(GROUP_PREFIX);
+/** Day headers and the blank row under them: rendered, but never selectable. */
+function isDecorRow(value: string): boolean {
+  return value.startsWith(GROUP_PREFIX) || value.startsWith(GAP_PREFIX);
 }
 
 function firstSelectableIndex(items: SelectItem[]): number {
-  const index = items.findIndex((item) => !isGroupHeader(item.value));
+  const index = items.findIndex((item) => !isDecorRow(item.value));
   return index >= 0 ? index : 0;
 }
 
@@ -96,9 +99,9 @@ function itemDescription(
   return parts.join(" · ");
 }
 
-// Day headers are ordinary (non-selectable) items, so SelectList keeps scrolling
-// them together with their group instead of us reimplementing list rendering,
-// scrolling and selection bookkeeping.
+// Day headers and their blank separator row are ordinary (non-selectable)
+// items, so SelectList keeps scrolling them together with their group instead of
+// us reimplementing list rendering, scrolling and selection bookkeeping.
 function buildItems(
   sessions: SessionInfo[], // must already be sorted by `modified` descending
   currentFile: string | undefined,
@@ -117,6 +120,8 @@ function buildItems(
         // while still following the active theme.
         label: theme.fg("text", theme.bold(label)),
       });
+      // A blank row keeps the day title separated from its sessions.
+      items.push({ value: `${GAP_PREFIX}${label}`, label: "" });
     }
     items.push({
       value: session.path,
@@ -127,20 +132,26 @@ function buildItems(
   return items;
 }
 
-/** What the picker searches: the fields it displays, plus the working directory. */
+/**
+ * What the picker searches: the fields each row shows. The project path is only
+ * searched in `--all` mode, because within a single project every row shares it
+ * and including it would make short queries match the whole list.
+ */
 function sessionSearchText(
   session: Pick<SessionInfo, "id" | "name" | "firstMessage" | "cwd">,
+  includeCwd: boolean,
 ): string {
-  return `${session.id} ${session.name ?? ""} ${session.firstMessage} ${session.cwd}`;
+  const base = `${session.id} ${session.name ?? ""} ${session.firstMessage}`;
+  return includeCwd ? `${base} ${session.cwd}` : base;
 }
 
 // Every whitespace-separated token must match somewhere (AND semantics); each
 // token is a fuzzy in-order match: the same matcher Pi's own session picker
 // uses, so search behaves the way it does elsewhere in Pi.
-function matchesSearch(session: SessionInfo, query: string): boolean {
+function matchesSearch(session: SessionInfo, query: string, includeCwd = false): boolean {
   const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return true;
-  const text = sessionSearchText(session);
+  const text = sessionSearchText(session, includeCwd);
   return tokens.every((token) => fuzzyMatch(token, text).matches);
 }
 
@@ -439,7 +450,7 @@ async function pickModal(
       const filteredSessions = (): SessionInfo[] => {
         const query = search.getValue();
         if (!query.trim()) return visibleSessions();
-        return visibleSessions().filter((session) => matchesSearch(session, query));
+        return visibleSessions().filter((session) => matchesSearch(session, query, listAll));
       };
 
       let itemCount = 0;
@@ -455,11 +466,11 @@ async function pickModal(
         );
         // A day header must never be picked or kept as the selection.
         list.onSelect = (item) => {
-          if (!isGroupHeader(item.value)) done(item.value);
+          if (!isDecorRow(item.value)) done(item.value);
         };
         list.onCancel = () => done(null);
         list.onSelectionChange = (item) => {
-          if (!isGroupHeader(item.value)) selectedPath = item.value;
+          if (!isDecorRow(item.value)) selectedPath = item.value;
         };
         const index = selectedPath ? items.findIndex((item) => item.value === selectedPath) : -1;
         list.setSelectedIndex(index >= 0 ? index : firstSelectableIndex(items));
@@ -469,11 +480,12 @@ async function pickModal(
       let selectList = makeList();
 
       // Arrow keys (including the wrap-around at both ends) can land on a day
-      // header; keep walking in the same direction until a session is selected.
+      // header or its blank row; keep walking in the same direction until a
+      // session is selected.
       const movePastHeader = (data: string): void => {
         for (let guard = 0; guard <= itemCount; guard += 1) {
           const value = selectList.getSelectedItem()?.value;
-          if (!value || !isGroupHeader(value)) return;
+          if (!value || !isDecorRow(value)) return;
           selectList.handleInput(data);
         }
       };
