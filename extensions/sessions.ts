@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import {
   SessionManager,
@@ -120,8 +120,10 @@ function buildItems(
         // while still following the active theme.
         label: theme.fg("text", theme.bold(label)),
       });
-      // A blank row keeps the day title separated from its sessions.
-      items.push({ value: `${GAP_PREFIX}${label}`, label: "" });
+      // A blank row keeps the day title separated from its sessions. The label
+      // must not be empty: SelectList falls back to `label || value` and would
+      // render the raw `__gap__:` marker instead of a blank line.
+      items.push({ value: `${GAP_PREFIX}${label}`, label: " " });
     }
     items.push({
       value: session.path,
@@ -133,25 +135,26 @@ function buildItems(
 }
 
 /**
- * What the picker searches: the fields each row shows. The project path is only
- * searched in `--all` mode, because within a single project every row shares it
- * and including it would make short queries match the whole list.
+ * What the picker searches: exactly the text each row displays, meaning the same
+ * label the list renders, the short id shown in every description, and — only
+ * when listing every project, where the row shows the project path — the project
+ * folder name. Searching anything broader (the full uuid, the whole first
+ * message, the whole path) matched rows whose visible text has nothing to do
+ * with the query, because fuzzy matching over a long string matches almost any
+ * short query.
  */
-function sessionSearchText(
-  session: Pick<SessionInfo, "id" | "name" | "firstMessage" | "cwd">,
-  includeCwd: boolean,
-): string {
-  const base = `${session.id} ${session.name ?? ""} ${session.firstMessage}`;
-  return includeCwd ? `${base} ${session.cwd}` : base;
+function sessionSearchText(session: SessionInfo, includeProject: boolean): string {
+  const base = `${session.id.slice(0, 8)} ${itemLabel(session)}`;
+  return includeProject ? `${base} ${basename(session.cwd)}` : base;
 }
 
 // Every whitespace-separated token must match somewhere (AND semantics); each
 // token is a fuzzy in-order match: the same matcher Pi's own session picker
 // uses, so search behaves the way it does elsewhere in Pi.
-function matchesSearch(session: SessionInfo, query: string, includeCwd = false): boolean {
+function matchesSearch(session: SessionInfo, query: string, includeProject = false): boolean {
   const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return true;
-  const text = sessionSearchText(session, includeCwd);
+  const text = sessionSearchText(session, includeProject);
   return tokens.every((token) => fuzzyMatch(token, text).matches);
 }
 
