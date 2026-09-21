@@ -14,7 +14,7 @@ No more digging through `~/.pi/agent/sessions/` to find sessions.
   time, and a short id.
 - Entries are grouped under a day header: `Today` for sessions with activity
   today, otherwise the date such as `Fri Sep 18 2026`. A blank, non-selectable
-  row separates each day title from its sessions, and within each day the most
+  row separates the day groups, and within each day the most
   recently used session stays first.
 - The currently open session is marked `current`.
 - A `Search` field filters the list as you type. Matching is fuzzy and

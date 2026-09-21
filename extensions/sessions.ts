@@ -69,7 +69,7 @@ function groupLabel(date: Date, today: Date = new Date()): string {
   return sameDay ? "Today" : date.toDateString();
 }
 
-/** Day headers and the blank row under them: rendered, but never selectable. */
+/** Day headers and the blank rows between groups: rendered, never selectable. */
 function isDecorRow(value: string): boolean {
   return value.startsWith(GROUP_PREFIX) || value.startsWith(GAP_PREFIX);
 }
@@ -99,7 +99,7 @@ function itemDescription(
   return parts.join(" · ");
 }
 
-// Day headers and their blank separator row are ordinary (non-selectable)
+// Day headers and the blank row between groups are ordinary (non-selectable)
 // items, so SelectList keeps scrolling them together with their group instead of
 // us reimplementing list rendering, scrolling and selection bookkeeping.
 function buildItems(
@@ -114,16 +114,18 @@ function buildItems(
     const label = groupLabel(session.modified);
     if (label !== currentGroup) {
       currentGroup = label;
+      // A blank row separates consecutive groups, opencode-style: the day title
+      // sits directly above its own sessions instead of being pushed away from
+      // them. The first group starts at the top with no leading blank line.
+      // The label must not be empty: SelectList renders `item.label ||
+      // item.value` and would show the raw `__gap__:` marker instead.
+      if (items.length > 0) items.push({ value: `${GAP_PREFIX}${label}`, label: " " });
       items.push({
         value: `${GROUP_PREFIX}${label}`,
         // Theme `text` (near-white on a dark theme) keeps the day label readable
         // while still following the active theme.
         label: theme.fg("text", theme.bold(label)),
       });
-      // A blank row keeps the day title separated from its sessions. The label
-      // must not be empty: SelectList falls back to `label || value` and would
-      // render the raw `__gap__:` marker instead of a blank line.
-      items.push({ value: `${GAP_PREFIX}${label}`, label: " " });
     }
     items.push({
       value: session.path,
@@ -180,10 +182,26 @@ function frameLines(lines: readonly string[], width: number, theme: Theme): stri
   return [solidLine(top, theme), ...body, solidLine(bottom, theme)];
 }
 
-function selectTheme(theme: Theme): SelectListTheme {
+// `rowWidth` is a getter because the list only learns the row width while it
+// renders, which is when these callbacks run. With the default (0) the selected
+// row is styled but not painted as a full-width bar.
+function selectTheme(theme: Theme, rowWidth: () => number = () => 0): SelectListTheme {
   return {
     selectedPrefix: (t) => theme.fg("accent", t),
-    selectedText: (t) => theme.fg("accent", t),
+    // The whole selected row (prefix, label, spacing and description) arrives here
+    // as one string, so padding it to the row width paints the bar across the
+    // entire row. Over-padding on a narrow terminal is harmless: the line is
+    // truncated to the panel width afterwards.
+    //
+    // The row is not recoloured: the bar alone marks the selection. The leading
+    // `→ ` that SelectList hardcodes for the selected row is replaced by two
+    // spaces, which is exactly the prefix every other row uses, so the text stays
+    // aligned with its neighbours and only the background differs.
+    selectedText: (t) => {
+      const row = t.startsWith("→ ") ? `  ${t.slice(2)}` : t;
+      const pad = " ".repeat(Math.max(0, rowWidth() - visibleWidth(row)));
+      return theme.bg("selectedBg", row + pad);
+    },
     description: (t) => theme.fg("muted", t),
     scrollInfo: (t) => theme.fg("dim", t),
     noMatch: (t) => theme.fg("warning", t),
@@ -374,13 +392,14 @@ async function confirmOverlay(
 ): Promise<boolean> {
   return ctx.ui.custom<boolean>(
     (tui, theme, _keybindings, done) => {
+      let rowWidth = 0;
       const list = new SelectList(
         [
           { value: "confirm", label: options.confirmLabel ?? "Yes" },
           { value: "cancel", label: options.cancelLabel ?? "No" },
         ],
         2,
-        selectTheme(theme),
+        selectTheme(theme, () => rowWidth),
       );
       list.onSelect = (item) => done(item.value === "confirm");
       list.onCancel = () => done(false);
@@ -389,6 +408,7 @@ async function confirmOverlay(
       return {
         render: (width: number) => {
           const inner = Math.max(1, width - 4);
+          rowWidth = inner;
           const wrapWidth = Math.max(8, inner - 1);
           const body = options.lines.flatMap((line) => {
             if (line.text.trim() === "") return [""];
@@ -457,6 +477,7 @@ async function pickModal(
       };
 
       let itemCount = 0;
+      let rowWidth = 0;
 
       const makeList = (): SelectList => {
         const items = buildItems(filteredSessions(), currentFile, listAll, theme);
@@ -464,7 +485,7 @@ async function pickModal(
         const list = new SelectList(
           items,
           maxBody,
-          selectTheme(theme),
+          selectTheme(theme, () => rowWidth),
           { maxPrimaryColumnWidth: 44 },
         );
         // A day header must never be picked or kept as the selection.
@@ -483,8 +504,8 @@ async function pickModal(
       let selectList = makeList();
 
       // Arrow keys (including the wrap-around at both ends) can land on a day
-      // header or its blank row; keep walking in the same direction until a
-      // session is selected.
+      // header or a blank row between groups; keep walking in the same direction
+      // until a session is selected.
       const movePastHeader = (data: string): void => {
         for (let guard = 0; guard <= itemCount; guard += 1) {
           const value = selectList.getSelectedItem()?.value;
@@ -601,6 +622,7 @@ async function pickModal(
         },
         render: (width) => {
           const inner = Math.max(1, width - 4);
+          rowWidth = inner;
           const termRows = Math.max(20, tui.terminal.rows);
           const archived = view === "archived";
 
