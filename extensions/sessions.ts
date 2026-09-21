@@ -182,26 +182,13 @@ function frameLines(lines: readonly string[], width: number, theme: Theme): stri
   return [solidLine(top, theme), ...body, solidLine(bottom, theme)];
 }
 
-// `rowWidth` is a getter because the list only learns the row width while it
-// renders, which is when these callbacks run. With the default (0) the selected
-// row is styled but not painted as a full-width bar.
-function selectTheme(theme: Theme, rowWidth: () => number = () => 0): SelectListTheme {
+function selectTheme(theme: Theme): SelectListTheme {
   return {
     selectedPrefix: (t) => theme.fg("accent", t),
-    // The whole selected row (prefix, label, spacing and description) arrives here
-    // as one string, so padding it to the row width paints the bar across the
-    // entire row. Over-padding on a narrow terminal is harmless: the line is
-    // truncated to the panel width afterwards.
-    //
-    // The row is not recoloured: the bar alone marks the selection. The leading
-    // `→ ` that SelectList hardcodes for the selected row is replaced by two
-    // spaces, which is exactly the prefix every other row uses, so the text stays
-    // aligned with its neighbours and only the background differs.
-    selectedText: (t) => {
-      const row = t.startsWith("→ ") ? `  ${t.slice(2)}` : t;
-      const pad = " ".repeat(Math.max(0, rowWidth() - visibleWidth(row)));
-      return theme.bg("selectedBg", row + pad);
-    },
+    // Selection is the `→` prefix SelectList draws plus accent-coloured text, the
+    // same treatment the day title gets, instead of a background bar: the row
+    // keeps the panel background and only the text changes colour.
+    selectedText: (t) => theme.fg("accent", t),
     description: (t) => theme.fg("muted", t),
     scrollInfo: (t) => theme.fg("dim", t),
     noMatch: (t) => theme.fg("warning", t),
@@ -392,14 +379,13 @@ async function confirmOverlay(
 ): Promise<boolean> {
   return ctx.ui.custom<boolean>(
     (tui, theme, _keybindings, done) => {
-      let rowWidth = 0;
       const list = new SelectList(
         [
           { value: "confirm", label: options.confirmLabel ?? "Yes" },
           { value: "cancel", label: options.cancelLabel ?? "No" },
         ],
         2,
-        selectTheme(theme, () => rowWidth),
+        selectTheme(theme),
       );
       list.onSelect = (item) => done(item.value === "confirm");
       list.onCancel = () => done(false);
@@ -408,7 +394,6 @@ async function confirmOverlay(
       return {
         render: (width: number) => {
           const inner = Math.max(1, width - 4);
-          rowWidth = inner;
           const wrapWidth = Math.max(8, inner - 1);
           const body = options.lines.flatMap((line) => {
             if (line.text.trim() === "") return [""];
@@ -477,7 +462,6 @@ async function pickModal(
       };
 
       let itemCount = 0;
-      let rowWidth = 0;
 
       const makeList = (): SelectList => {
         const items = buildItems(filteredSessions(), currentFile, listAll, theme);
@@ -485,7 +469,7 @@ async function pickModal(
         const list = new SelectList(
           items,
           maxBody,
-          selectTheme(theme, () => rowWidth),
+          selectTheme(theme),
           { maxPrimaryColumnWidth: 44 },
         );
         // A day header must never be picked or kept as the selection.
@@ -622,7 +606,6 @@ async function pickModal(
         },
         render: (width) => {
           const inner = Math.max(1, width - 4);
-          rowWidth = inner;
           const termRows = Math.max(20, tui.terminal.rows);
           const archived = view === "archived";
 
@@ -734,7 +717,7 @@ async function pickModal(
     },
     {
       overlay: true,
-      overlayOptions: { anchor: "center", width: 130, minWidth: 100, maxHeight: "85%", margin: 2 },
+      overlayOptions: { anchor: "center", width: 120, minWidth: 100, maxHeight: "85%", margin: 2 },
     },
   );
 }
