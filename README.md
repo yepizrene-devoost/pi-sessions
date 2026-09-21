@@ -12,6 +12,9 @@ No more digging through `~/.pi/agent/sessions/` to find sessions.
   centered TUI overlay (modal), not an inline list.
 - Each entry shows the display name (or first message), message count, modified
   time, and a short id.
+- Entries are grouped under a day header: `Today` for sessions with activity
+  today, otherwise the date such as `Fri Sep 18 2026`. Within each day the most
+  recently used session stays first.
 - The currently open session is marked `current`.
 - Pick one to confirm and resume it; the current session is suspended and the
   selected one is reopened in place.
@@ -66,7 +69,8 @@ Run Pi inside your project, then type:
 
 Inside the picker:
 
-- `↑`/`↓` navigate
+- `↑`/`↓` navigate; the day headers are not selectable, so moving always lands
+  on a session
 - `Enter` resume the selected session
 - `Ctrl+R` rename the selected session
 - `Ctrl+A` archive / unarchive the selected session

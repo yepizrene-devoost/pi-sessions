@@ -23,6 +23,7 @@ import {
 const MAX_LABEL = 56;
 const MAX_SUBTITLE = 80;
 const ARCHIVE_FILE = ".pi-sessions-archived.json";
+const GROUP_PREFIX = "__group__:";
 
 type SessionView = "active" | "archived";
 
@@ -50,6 +51,29 @@ function relativeTime(date: Date): string {
   return date.toLocaleDateString();
 }
 
+/**
+ * Sessions are listed newest-activity-first, so a group boundary is just a day
+ * change in `modified`. The current day gets a friendly label; older days keep
+ * an unambiguous date.
+ */
+function groupLabel(date: Date, today: Date = new Date()): string {
+  if (Number.isNaN(date.getTime())) return "Unknown date";
+  const sameDay =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate();
+  return sameDay ? "Today" : date.toDateString();
+}
+
+function isGroupHeader(value: string): boolean {
+  return value.startsWith(GROUP_PREFIX);
+}
+
+function firstSelectableIndex(items: SelectItem[]): number {
+  const index = items.findIndex((item) => !isGroupHeader(item.value));
+  return index >= 0 ? index : 0;
+}
+
 function itemLabel(session: Pick<SessionInfo, "name" | "firstMessage" | "id">): string {
   const raw = session.name?.trim() || session.firstMessage?.trim() || session.id.slice(0, 8);
   return truncate(raw, MAX_LABEL);
@@ -70,16 +94,33 @@ function itemDescription(
   return parts.join(" · ");
 }
 
+// Day headers are ordinary (non-selectable) items, so SelectList keeps scrolling
+// them together with their group instead of us reimplementing list rendering,
+// scrolling and selection bookkeeping.
 function buildItems(
-  sessions: SessionInfo[],
+  sessions: SessionInfo[], // must already be sorted by `modified` descending
   currentFile: string | undefined,
   listAll: boolean,
+  theme: Theme,
 ): SelectItem[] {
-  return sessions.map((session) => ({
-    value: session.path,
-    label: itemLabel(session),
-    description: itemDescription(session, currentFile, listAll),
-  }));
+  const items: SelectItem[] = [];
+  let currentGroup: string | undefined;
+  for (const session of sessions) {
+    const label = groupLabel(session.modified);
+    if (label !== currentGroup) {
+      currentGroup = label;
+      items.push({
+        value: `${GROUP_PREFIX}${label}`,
+        label: theme.fg("accent", theme.bold(label)),
+      });
+    }
+    items.push({
+      value: session.path,
+      label: itemLabel(session),
+      description: itemDescription(session, currentFile, listAll),
+    });
+  }
+  return items;
 }
 
 // Wrap rendered content lines in a full box with all four borders.
@@ -359,27 +400,41 @@ async function pickModal(
       const visibleSessions = (): SessionInfo[] =>
         sessions.filter((s) => (view === "archived" ? isArchived(registry, s) : !isArchived(registry, s)));
 
+      let itemCount = 0;
+
       const makeList = (): SelectList => {
-        const items = buildItems(visibleSessions(), currentFile, listAll);
+        const items = buildItems(visibleSessions(), currentFile, listAll, theme);
+        itemCount = items.length;
         const list = new SelectList(
           items,
           maxBody,
           selectTheme(theme),
           { maxPrimaryColumnWidth: 44 },
         );
-        list.onSelect = (item) => done(item.value);
+        // A day header must never be picked or kept as the selection.
+        list.onSelect = (item) => {
+          if (!isGroupHeader(item.value)) done(item.value);
+        };
         list.onCancel = () => done(null);
         list.onSelectionChange = (item) => {
-          selectedPath = item.value;
+          if (!isGroupHeader(item.value)) selectedPath = item.value;
         };
-        if (selectedPath) {
-          const index = items.findIndex((item) => item.value === selectedPath);
-          if (index >= 0) list.setSelectedIndex(index);
-        }
+        const index = selectedPath ? items.findIndex((item) => item.value === selectedPath) : -1;
+        list.setSelectedIndex(index >= 0 ? index : firstSelectableIndex(items));
         return list;
       };
 
       let selectList = makeList();
+
+      // Arrow keys (including the wrap-around at both ends) can land on a day
+      // header; keep walking in the same direction until a session is selected.
+      const movePastHeader = (data: string): void => {
+        for (let guard = 0; guard <= itemCount; guard += 1) {
+          const value = selectList.getSelectedItem()?.value;
+          if (!value || !isGroupHeader(value)) return;
+          selectList.handleInput(data);
+        }
+      };
 
       const rebuild = (): void => {
         selectList = makeList();
@@ -543,7 +598,9 @@ async function pickModal(
             toggleView();
             return;
           }
+          const before = selectList.getSelectedItem()?.value;
           selectList.handleInput(data);
+          if (selectList.getSelectedItem()?.value !== before) movePastHeader(data);
           tui.requestRender();
         },
       };
