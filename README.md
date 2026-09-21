@@ -16,6 +16,14 @@ No more digging through `~/.pi/agent/sessions/` to find sessions.
   today, otherwise the date such as `Fri Sep 18 2026`. Within each day the most
   recently used session stays first.
 - The currently open session is marked `current`.
+- A `Search` field filters the list as you type. Matching is fuzzy and
+  case-insensitive over the session id, display name, first message and project
+  path; whitespace-separated tokens must all match, in order but not necessarily
+  adjacent, and the day headers follow the matches. With no matches the picker
+  shows `(no sessions match "<query>")` instead of the list.
+- The picker is a solid panel: every line, borders included, is painted with the
+  theme's message background, so the transcript behind it never shows through.
+  The day headers use the theme's text color instead of the accent color.
 - Pick one to confirm and resume it; the current session is suspended and the
   selected one is reopened in place.
 - Rename any session directly from the picker with `Ctrl+R` (emptying the name
@@ -78,7 +86,10 @@ Inside the picker:
 - `Ctrl+D` delete the selected session permanently (a confirmation modal opens
   over the list; `No` is preselected, so `Enter` and `Esc` cancel and deleting
   takes a deliberate selection)
-- `Esc` cancel
+- type to filter the list live: matching is fuzzy and case-insensitive, and
+  whitespace-separated tokens must all match, in order but not necessarily
+  adjacent
+- `Esc` clears an active filter first; with no filter it closes the picker
 
 Options:
 

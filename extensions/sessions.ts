@@ -14,6 +14,8 @@ import {
   type SelectItem,
   SelectList,
   type SelectListTheme,
+  fuzzyMatch,
+  getKeybindings,
   matchesKey,
   truncateToWidth,
   visibleWidth,
@@ -111,7 +113,9 @@ function buildItems(
       currentGroup = label;
       items.push({
         value: `${GROUP_PREFIX}${label}`,
-        label: theme.fg("accent", theme.bold(label)),
+        // Theme `text` (near-white on a dark theme) keeps the day label readable
+        // while still following the active theme.
+        label: theme.fg("text", theme.bold(label)),
       });
     }
     items.push({
@@ -123,17 +127,43 @@ function buildItems(
   return items;
 }
 
-// Wrap rendered content lines in a full box with all four borders.
-function frameLines(lines: readonly string[], width: number): string[] {
+/** What the picker searches: the fields it displays, plus the working directory. */
+function sessionSearchText(
+  session: Pick<SessionInfo, "id" | "name" | "firstMessage" | "cwd">,
+): string {
+  return `${session.id} ${session.name ?? ""} ${session.firstMessage} ${session.cwd}`;
+}
+
+// Every whitespace-separated token must match somewhere (AND semantics); each
+// token is a fuzzy in-order match: the same matcher Pi's own session picker
+// uses, so search behaves the way it does elsewhere in Pi.
+function matchesSearch(session: SessionInfo, query: string): boolean {
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+  const text = sessionSearchText(session);
+  return tokens.every((token) => fuzzyMatch(token, text).matches);
+}
+
+// Paint a solid panel background over a fully padded line. Nested styled text
+// and `truncateToWidth` can emit a full reset, which would punch a transparent
+// hole in the panel, so the background is re-applied after every reset.
+function solidLine(text: string, theme: Theme): string {
+  const bg = theme.getBgAnsi("customMessageBg");
+  return bg + text.replaceAll("\x1b[0m", `\x1b[0m${bg}`) + "\x1b[49m";
+}
+
+// Wrap rendered content lines in a full box with all four borders, painted on an
+// opaque panel background so the transcript behind the modal never shows through.
+function frameLines(lines: readonly string[], width: number, theme: Theme): string[] {
   const inner = Math.max(1, width - 4); // space between the side borders (1+1 padding, 1+1 borders)
   const top = "┌" + "─".repeat(Math.max(0, width - 2)) + "┐";
   const bottom = "└" + "─".repeat(Math.max(0, width - 2)) + "┘";
   const body = lines.map((line) => {
     const txt = truncateToWidth(line, inner, "");
     const pad = Math.max(0, inner - visibleWidth(txt));
-    return "│ " + txt + " ".repeat(pad) + " │";
+    return solidLine("│ " + txt + " ".repeat(pad) + " │", theme);
   });
-  return [top, ...body, bottom];
+  return [solidLine(top, theme), ...body, solidLine(bottom, theme)];
 }
 
 function selectTheme(theme: Theme): SelectListTheme {
@@ -286,7 +316,7 @@ async function renameDialog(
             "",
             theme.fg("dim", "enter submit · esc cancel"),
           ];
-          return frameLines(block, width);
+          return frameLines(block, width, theme);
         },
         invalidate: () => input.invalidate(),
         handleInput: (data: string) => {
@@ -361,7 +391,7 @@ async function confirmOverlay(
             "",
             " " + theme.fg("dim", "enter select · esc cancel"),
           ];
-          return frameLines(block, width);
+          return frameLines(block, width, theme);
         },
         invalidate: () => list.invalidate(),
         handleInput: (data: string) => {
@@ -397,13 +427,25 @@ async function pickModal(
       let view: SessionView = initialView;
       let selectedPath: string | undefined;
 
+      const search = new Input({
+        prompt: " ",
+        placeholder: "Search",
+        placeholderStyle: (text) => theme.fg("dim", text),
+      });
+
       const visibleSessions = (): SessionInfo[] =>
         sessions.filter((s) => (view === "archived" ? isArchived(registry, s) : !isArchived(registry, s)));
+
+      const filteredSessions = (): SessionInfo[] => {
+        const query = search.getValue();
+        if (!query.trim()) return visibleSessions();
+        return visibleSessions().filter((session) => matchesSearch(session, query));
+      };
 
       let itemCount = 0;
 
       const makeList = (): SelectList => {
-        const items = buildItems(visibleSessions(), currentFile, listAll, theme);
+        const items = buildItems(filteredSessions(), currentFile, listAll, theme);
         itemCount = items.length;
         const list = new SelectList(
           items,
@@ -533,7 +575,15 @@ async function pickModal(
         rebuild();
       };
 
+      let focused = false;
       return {
+        get focused() {
+          return focused;
+        },
+        set focused(value: boolean) {
+          focused = value;
+          search.focused = value;
+        },
         render: (width) => {
           const inner = Math.max(1, width - 4);
           const termRows = Math.max(20, tui.terminal.rows);
@@ -546,21 +596,36 @@ async function pickModal(
               ? "Across every project"
               : truncate(ctx.cwd, MAX_SUBTITLE);
           const help = archived
-            ? "↑↓ move · enter resume · ctrl+r rename · ctrl+a unarchive · ctrl+d delete · tab active · esc close"
-            : "↑↓ move · enter resume · ctrl+r rename · ctrl+a archive · ctrl+d delete · tab archived · esc close";
+            ? "↑↓ move · enter resume · ctrl+r rename · ctrl+a unarchive · ctrl+d delete · tab active"
+            : "↑↓ move · enter resume · ctrl+r rename · ctrl+a archive · ctrl+d delete · tab archived";
+          const filterHint = search.getValue().trim()
+            ? "esc clear filter"
+            : "esc close · type to search";
 
           const header = [
             " " + theme.fg("accent", theme.bold(title)),
             " " + theme.fg("dim", truncate(subtitle, MAX_SUBTITLE)),
-            "",
+            ...search.render(inner),
             "",
           ];
-          const footer = ["", " " + theme.fg("dim", help)];
+          const footer = [
+            "",
+            " " + theme.fg("dim", help),
+            " " + theme.fg("dim", filterHint),
+          ];
 
           const empty = visibleSessions().length === 0;
           const listLines = empty
             ? [" " + theme.fg("dim", archived ? "(no archived sessions)" : "(no active sessions)")]
-            : selectList.render(inner);
+            : filteredSessions().length === 0
+              ? [
+                  " " +
+                    theme.fg(
+                      "dim",
+                      `(no sessions match "${truncate(search.getValue(), 24)}")`,
+                    ),
+                ]
+              : selectList.render(inner);
 
           const available = termRows - 4 - header.length - footer.length;
           const bodyHeight = Math.max(minBody, Math.min(listLines.length, available));
@@ -576,12 +641,13 @@ async function pickModal(
             ...Array<string>(padBottom).fill(""),
             ...footer,
           ];
-          return frameLines(block, width);
+          return frameLines(block, width, theme);
         },
         invalidate: () => {
           selectList.invalidate();
         },
         handleInput: (data) => {
+          const keybindings = getKeybindings();
           if (matchesKey(data, "ctrl+r")) {
             openRename();
             return;
@@ -598,16 +664,40 @@ async function pickModal(
             toggleView();
             return;
           }
-          const before = selectList.getSelectedItem()?.value;
-          selectList.handleInput(data);
-          if (selectList.getSelectedItem()?.value !== before) movePastHeader(data);
-          tui.requestRender();
+          if (keybindings.matches(data, "tui.select.cancel")) {
+            // Escape clears an active filter before closing, so a search never
+            // traps the user in a short list.
+            if (matchesKey(data, "escape") && search.getValue().length > 0) {
+              search.setValue("");
+              selectedPath = undefined;
+              rebuild();
+              return;
+            }
+            selectList.handleInput(data);
+            return;
+          }
+          if (keybindings.matches(data, "tui.select.confirm")) {
+            selectList.handleInput(data);
+            return;
+          }
+          if (
+            keybindings.matches(data, "tui.select.up") ||
+            keybindings.matches(data, "tui.select.down")
+          ) {
+            selectList.handleInput(data);
+            movePastHeader(data);
+            tui.requestRender();
+            return;
+          }
+          // Anything else is search text: type to filter the list as you go.
+          search.handleInput(data);
+          rebuild();
         },
       };
     },
     {
       overlay: true,
-      overlayOptions: { anchor: "center", width: 100, minWidth: 80, maxHeight: "85%", margin: 2 },
+      overlayOptions: { anchor: "center", width: 130, minWidth: 100, maxHeight: "85%", margin: 2 },
     },
   );
 }
