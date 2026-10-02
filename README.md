@@ -27,8 +27,9 @@ No more digging through `~/.pi/agent/sessions/` to find sessions.
 - The picker is a solid panel: every line, borders included, is painted with the
   theme's message background, so the transcript behind it never shows through.
   The day headers use the theme's text color instead of the accent color.
-- Pick one to confirm and resume it; the current session is suspended and the
-  selected one is reopened in place.
+- Pick one to confirm and resume it; the confirmation is a dialog stacked as a
+  modal over the list with `Yes` preselected, and the current session is
+  suspended while the selected one is reopened in place.
 - Rename any session directly from the picker with `Ctrl+R` (emptying the name
   clears it).
 - Archive a session with `Ctrl+A`: it is a soft delete, so it leaves the active
@@ -82,7 +83,8 @@ Inside the picker:
 
 - `↑`/`↓` navigate; the day headers are not selectable, so moving always lands
   on a session
-- `Enter` resume the selected session
+- `Enter` resume the selected session: a confirmation dialog (with `Yes`
+  preselected) stacks over the list before Pi switches
 - `Ctrl+R` rename the selected session
 - `Ctrl+A` archive / unarchive the selected session
 - `Tab` switch between the active and archived views
@@ -109,7 +111,9 @@ Archiving is a **soft delete**: the session is hidden from the active list but
 its `.jsonl` file is untouched and still shows up in the archived view.
 Permanent deletion (`Ctrl+D`) works from either view, asks for confirmation in a
 modal stacked over the list with `No` preselected, and then removes the session
-file from disk.
+file from disk. Resuming also confirms in a stacked modal, but with `Yes`
+preselected: switching sessions is reversible, so it does not need the guard a
+delete does.
 
 Archive state lives next to your sessions in
 `~/.pi/agent/sessions/.pi-sessions-archived.json`, keyed by session id, so it

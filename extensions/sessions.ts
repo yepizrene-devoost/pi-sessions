@@ -280,11 +280,15 @@ export default function sessionsExtension(pi: ExtensionAPI) {
         return;
       }
 
-      const ok = await ctx.ui.confirm(
-        `Resume "${itemLabel(session)}"?`,
-        `${session.path}\n\nSwitching suspends the current session and resumes the selected one.`,
-      );
-      if (!ok) return;
+      // The TUI picker confirms the resume in its own stacked dialog before it
+      // closes, so the built-in confirmation is only the non-TUI fallback.
+      if (ctx.mode !== "tui") {
+        const ok = await ctx.ui.confirm(
+          `Resume "${itemLabel(session)}"?`,
+          `${session.path}\n\n${RESUME_WARNING}`,
+        );
+        if (!ok) return;
+      }
 
       const result = await ctx.switchSession(session.path, {
         withSession: async (newCtx) => {
@@ -357,6 +361,9 @@ async function renameDialog(
 
 type ConfirmTone = "dim" | "warning" | "error";
 
+/** Title colour: destructive dialogs warn in `error`, reversible ones in `accent`. */
+type ConfirmTitleTone = "accent" | "error";
+
 interface ConfirmLine {
   text: string;
   tone?: ConfirmTone;
@@ -367,12 +374,27 @@ interface ConfirmOverlayOptions {
   lines: ConfirmLine[];
   confirmLabel?: string;
   cancelLabel?: string;
+  /** Preselect the confirming entry; destructive dialogs must leave it unset. */
+  confirmSelected?: boolean;
+  titleTone?: ConfirmTitleTone;
+}
+
+// What the resume confirmation states, shared by the stacked picker dialog and
+// the non-TUI one so both ask the same question.
+const RESUME_WARNING = "Switching suspends the current session and resumes the selected one.";
+
+function resumeConfirmLines(session: SessionInfo): ConfirmLine[] {
+  return [
+    { text: session.path, tone: "dim" },
+    { text: "" },
+    { text: RESUME_WARNING, tone: "warning" },
+  ];
 }
 
 // A confirmation dialog rendered as its own overlay, so it stacks on top of the
-// picker instead of replacing the editor area underneath it. The non-destructive
-// entry starts selected: this dialog only guards irreversible actions, so a stray
-// Enter must cancel instead of confirming.
+// picker instead of replacing the editor area underneath it. Destructive dialogs
+// leave the non-destructive entry selected (the default), so a stray Enter
+// cancels instead of acting; a reversible dialog may preselect the confirmation.
 async function confirmOverlay(
   ctx: ExtensionCommandContext,
   options: ConfirmOverlayOptions,
@@ -389,7 +411,7 @@ async function confirmOverlay(
       );
       list.onSelect = (item) => done(item.value === "confirm");
       list.onCancel = () => done(false);
-      list.setSelectedIndex(1);
+      list.setSelectedIndex(options.confirmSelected ? 0 : 1);
 
       return {
         render: (width: number) => {
@@ -402,7 +424,7 @@ async function confirmOverlay(
             );
           });
           const block = [
-            " " + theme.fg("error", theme.bold(options.title)),
+            " " + theme.fg(options.titleTone ?? "error", theme.bold(options.title)),
             "",
             ...body,
             "",
@@ -474,7 +496,25 @@ async function pickModal(
         );
         // A day header must never be picked or kept as the selection.
         list.onSelect = (item) => {
-          if (!isDecorRow(item.value)) done(item.value);
+          if (isDecorRow(item.value)) return;
+          const session = sessions.find((s) => s.path === item.value);
+          // The current session needs no confirmation: the handler reports it as
+          // already open. Every other one confirms in a dialog stacked over the
+          // picker before the picker closes, so the question never drops to the
+          // bottom of the screen.
+          if (!session || session.path === currentFile) {
+            done(item.value);
+            return;
+          }
+          void confirmOverlay(ctx, {
+            title: `Resume "${itemLabel(session)}"?`,
+            lines: resumeConfirmLines(session),
+            confirmSelected: true,
+            titleTone: "accent",
+          }).then((ok) => {
+            if (ok) done(session.path);
+            else tui.requestRender();
+          });
         };
         list.onCancel = () => done(null);
         list.onSelectionChange = (item) => {
